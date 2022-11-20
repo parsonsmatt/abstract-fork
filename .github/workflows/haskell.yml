@@ -1,21 +1,51 @@
-jobs:                                                                                                                   
-  generateMatrix:                                                                                                       
-    name: "Generate matrix from cabal"                                                                                  
-    runs-on: ubuntu-latest                                                                                              
-    outputs:                                                                                                            
-      matrix: ${{ steps.set-matrix.outputs.matrix }}                                                                    
-    steps:                                                                                                              
-      - name: Checkout base repo                                                                                        
-        uses: actions/checkout@v2                                                                                       
-      - name: Extract the tested GHC versions                                                                           
-        id: set-matrix                                                                                                  
-        run: |                                                                                                          
-          wget https://github.com/Kleidukos/get-tested/releases/download/v0.1.2.0/get-tested-0.1.2.0-linux-amd64 -O get-tested
-          chmod +x get-tested                                                                                           
-          ./get-tested --ubuntu --macos text-display.cabal >> $GITHUB_OUTPUT                                            
-  tests:                                                                                                                
-    name: ${{ matrix.ghc }} on ${{ matrix.os }}                                                                         
-    needs: generateMatrix                                                                                               
-    runs-on: ${{ matrix.os }}                                                                                           
-    strategy:                                                                                                           
-      matrix: ${{ fromJSON(needs.generateMatrix.outputs.matrix) }}
+name: CI
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types:
+      - opened
+      - synchronize
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cabal: ["3.8"]
+        ghc:
+          - "8.4.4"
+          - "8.6.5"
+          - "8.8.4"
+          - "8.10.7"
+          - "9.0.2"
+          - "9.2.4"
+          - "9.4.1"
+
+    env:
+      CONFIG: "--enable-tests --enable-benchmarks"
+    steps:
+      - uses: actions/checkout@v2
+      - uses: haskell/actions/setup@v1
+        id: setup-haskell-cabal
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: ${{ matrix.cabal }}
+      - run: cabal v2-update
+      - run: cabal v2-freeze $CONFIG
+      - run: cat cabal.project.freeze
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ${{ steps.setup-haskell-cabal.outputs.cabal-store }}
+          key: ${{ runner.os }}-${{ matrix.ghc }}-${{ hashFiles('cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.ghc }}-${{ hashFiles('cabal.project.freeze') }}
+            ${{ runner.os }}-${{ matrix.ghc }}-
+      - run: cabal v2-build all --disable-optimization --only-dependencies $CONFIG
+      - run: cabal v2-build all --disable-optimization $CONFIG
+      - run: cabal v2-test all --disable-optimization $CONFIG --test-options "--fail-on-focus"
+      - run: cabal v2-bench all --disable-optimization $CONFIG
+      - run: cabal v2-haddock all $CONFIG
+        continue-on-error: true
+      - run: cabal v2-sdist all
